@@ -205,3 +205,108 @@
 (define-read-only (get-next-profile-id)
   (var-get next-profile-id)
 )
+
+(define-read-only (get-next-post-id)
+  (var-get next-post-id)
+)
+
+;; Dynamic reputation calculation algorithm
+(define-read-only (calculate-reputation-score (profile-id uint))
+  (match (get-profile profile-id)
+    profile-data (let (
+        (base-score (get staked-amount profile-data))
+        (follower-bonus (* (get follower-count profile-data) u1000))
+        (endorsement-bonus (* (get total-endorsements profile-data) u2000))
+        (post-bonus (* (get post-count profile-data) u500))
+      )
+      (+ base-score (+ follower-bonus (+ endorsement-bonus post-bonus)))
+    )
+    u0
+  )
+)
+
+;; PROFILE MANAGEMENT FUNCTIONS
+
+;; Create new user profile with initial stake requirement
+(define-public (create-profile
+    (username (string-ascii 50))
+    (bio (string-utf8 280))
+    (avatar-url (string-ascii 200))
+  )
+  (let (
+      (profile-id (var-get next-profile-id))
+      (current-block stacks-block-height)
+    )
+    ;; Validation: Ensure unique profile per principal
+    (asserts! (is-none (map-get? principal-to-profile tx-sender))
+      ERR_PROFILE_EXISTS
+    )
+
+    ;; Validation: Username uniqueness
+    (asserts! (is-username-available username) ERR_PROFILE_EXISTS)
+
+    ;; Economic barrier: Verify stake capability
+    (asserts! (>= (stx-get-balance tx-sender) MIN_PROFILE_STAKE)
+      ERR_INSUFFICIENT_FUNDS
+    )
+
+    ;; Economic commitment: Transfer stake to contract
+    (try! (stx-transfer? MIN_PROFILE_STAKE tx-sender (as-contract tx-sender)))
+
+    ;; Profile creation with initial metrics
+    (map-set profiles { profile-id: profile-id } {
+      owner: tx-sender,
+      username: username,
+      bio: bio,
+      avatar-url: avatar-url,
+      created-at: current-block,
+      staked-amount: MIN_PROFILE_STAKE,
+      reputation-score: MIN_PROFILE_STAKE,
+      follower-count: u0,
+      following-count: u0,
+      post-count: u0,
+      total-endorsements: u0,
+      is-active: true,
+    })
+
+    ;; Identity mapping establishment
+    (map-set username-to-profile username profile-id)
+    (map-set principal-to-profile tx-sender profile-id)
+    (map-set profile-stakes {
+      profile-id: profile-id,
+      staker: tx-sender,
+    } {
+      amount: MIN_PROFILE_STAKE,
+      staked-at: current-block,
+    })
+
+    ;; State progression
+    (var-set next-profile-id (+ profile-id u1))
+
+    (ok profile-id)
+  )
+)
+
+;; Profile information updates (bio and avatar)
+(define-public (update-profile
+    (bio (string-utf8 280))
+    (avatar-url (string-ascii 200))
+  )
+  (let ((profile-result (map-get? principal-to-profile tx-sender)))
+    (match profile-result
+      profile-id (match (get-profile profile-id)
+        profile-data (begin
+          (map-set profiles { profile-id: profile-id }
+            (merge profile-data {
+              bio: bio,
+              avatar-url: avatar-url,
+            })
+          )
+          (ok true)
+        )
+        ERR_PROFILE_NOT_FOUND
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
