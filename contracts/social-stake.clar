@@ -519,3 +519,104 @@
     (ok true)
   )
 )
+
+;; TRUST VALIDATION & ENDORSEMENT SYSTEM
+
+;; Content endorsement with economic stake
+(define-public (endorse-post
+    (post-id uint)
+    (stake-amount uint)
+  )
+  (let (
+      (endorser-profile-result (map-get? principal-to-profile tx-sender))
+      (current-block stacks-block-height)
+    )
+    ;; Validation: Minimum endorsement stake
+    (asserts! (>= stake-amount MIN_ENDORSEMENT_STAKE) ERR_INVALID_AMOUNT)
+
+    ;; Validation: Content existence
+    (asserts! (is-some (get-post post-id)) ERR_POST_NOT_FOUND)
+
+    (match endorser-profile-result
+      endorser-id (begin
+        ;; Validation: Prevent duplicate endorsements
+        (asserts!
+          (is-none (map-get? post-endorsements {
+            post-id: post-id,
+            endorser: endorser-id,
+          }))
+          ERR_ALREADY_ENDORSED
+        )
+
+        ;; Validation: Economic capability
+        (asserts! (>= (stx-get-balance tx-sender) stake-amount)
+          ERR_INSUFFICIENT_FUNDS
+        )
+
+        ;; Economic commitment for trust signal
+        (try! (stx-transfer? stake-amount tx-sender (as-contract tx-sender)))
+
+        ;; Endorsement record creation
+        (map-set post-endorsements {
+          post-id: post-id,
+          endorser: endorser-id,
+        } {
+          endorsed-at: current-block,
+          stake-amount: stake-amount,
+        })
+
+        ;; Post endorsement count increment
+        (match (get-post post-id)
+          post-data (map-set posts { post-id: post-id }
+            (merge post-data { endorsement-count: (+ (get endorsement-count post-data) u1) })
+          )
+          false
+        )
+
+        ;; Author reputation enhancement
+        (match (get-post post-id)
+          post-data (match (get-profile (get author post-data))
+            author-profile (map-set profiles { profile-id: (get author post-data) }
+              (merge author-profile { total-endorsements: (+ (get total-endorsements author-profile) u1) })
+            )
+            false
+          )
+          false
+        )
+
+        (ok true)
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
+
+;; Cross-profile trust endorsement with message
+(define-public (endorse-profile
+    (endorsed-id uint)
+    (stake-amount uint)
+    (message (string-utf8 140))
+  )
+  (let (
+      (endorser-profile-result (map-get? principal-to-profile tx-sender))
+      (current-block stacks-block-height)
+    )
+    ;; Validation: Minimum stake requirement
+    (asserts! (>= stake-amount MIN_ENDORSEMENT_STAKE) ERR_INVALID_AMOUNT)
+
+    ;; Validation: Target profile existence
+    (asserts! (is-some (get-profile endorsed-id)) ERR_PROFILE_NOT_FOUND)
+
+    (match endorser-profile-result
+      endorser-id (begin
+        ;; Validation: Prevent self-endorsement
+        (asserts! (not (is-eq endorser-id endorsed-id)) ERR_UNAUTHORIZED)
+
+        ;; Validation: Prevent duplicate endorsements
+        (asserts!
+          (is-none (map-get? profile-endorsements {
+            endorser: endorser-id,
+            endorsed: endorsed-id,
+          }))
+          ERR_ALREADY_ENDORSED
+        )
