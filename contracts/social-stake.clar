@@ -620,3 +620,54 @@
           }))
           ERR_ALREADY_ENDORSED
         )
+
+        ;; Validation: Economic capability
+        (asserts! (>= (stx-get-balance tx-sender) stake-amount)
+          ERR_INSUFFICIENT_FUNDS
+        )
+
+        ;; Economic commitment for trust validation
+        (try! (stx-transfer? stake-amount tx-sender (as-contract tx-sender)))
+
+        ;; Endorsement record with message
+        (map-set profile-endorsements {
+          endorser: endorser-id,
+          endorsed: endorsed-id,
+        } {
+          endorsed-at: current-block,
+          stake-amount: stake-amount,
+          message: message,
+        })
+
+        ;; Target profile endorsement count increment
+        (match (get-profile endorsed-id)
+          endorsed-profile (map-set profiles { profile-id: endorsed-id }
+            (merge endorsed-profile { total-endorsements: (+ (get total-endorsements endorsed-profile) u1) })
+          )
+          false
+        )
+
+        (ok true)
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
+
+;; PROTOCOL ADMINISTRATION
+
+;; Protocol fee adjustment (owner-only)
+(define-public (set-protocol-fee-rate (new-rate uint))
+  (begin
+    ;; Authorization check
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+
+    ;; Validation: Maximum fee cap (10%)
+    (asserts! (<= new-rate u1000) ERR_INVALID_AMOUNT)
+
+    ;; Fee rate update
+    (var-set protocol-fee-rate new-rate)
+
+    (ok true)
+  )
+)
