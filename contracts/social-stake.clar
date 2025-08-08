@@ -404,3 +404,118 @@
     )
   )
 )
+
+;; Remove following relationship with metric updates
+(define-public (unfollow-user (following-id uint))
+  (let ((follower-profile-result (map-get? principal-to-profile tx-sender)))
+    (match follower-profile-result
+      follower-id (begin
+        ;; Validation: Verify existing relationship
+        (asserts! (is-following follower-id following-id) ERR_NOT_FOLLOWING)
+
+        ;; Relationship termination
+        (map-delete following {
+          follower: follower-id,
+          following: following-id,
+        })
+
+        ;; Follower count decrement for target
+        (match (get-profile following-id)
+          following-profile (map-set profiles { profile-id: following-id }
+            (merge following-profile { follower-count: (- (get follower-count following-profile) u1) })
+          )
+          false
+        )
+
+        ;; Following count decrement for initiator
+        (match (get-profile follower-id)
+          follower-profile (map-set profiles { profile-id: follower-id }
+            (merge follower-profile { following-count: (- (get following-count follower-profile) u1) })
+          )
+          false
+        )
+
+        (ok true)
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
+
+;; CONTENT CREATION & AMPLIFICATION
+
+;; Create new content post with author attribution
+(define-public (create-post (content (string-utf8 500)))
+  (let (
+      (author-profile-result (map-get? principal-to-profile tx-sender))
+      (post-id (var-get next-post-id))
+      (current-block stacks-block-height)
+    )
+    (match author-profile-result
+      author-id (begin
+        ;; Content creation with initial metrics
+        (map-set posts { post-id: post-id } {
+          author: author-id,
+          content: content,
+          created-at: current-block,
+          boosted-amount: u0,
+          endorsement-count: u0,
+          is-active: true,
+        })
+
+        ;; Author post count increment
+        (match (get-profile author-id)
+          author-profile (map-set profiles { profile-id: author-id }
+            (merge author-profile { post-count: (+ (get post-count author-profile) u1) })
+          )
+          false
+        )
+
+        ;; State progression
+        (var-set next-post-id (+ post-id u1))
+
+        (ok post-id)
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
+
+;; Economic content amplification through STX staking
+(define-public (boost-post
+    (post-id uint)
+    (amount uint)
+  )
+  (let ((current-block stacks-block-height))
+    ;; Validation: Minimum boost threshold
+    (asserts! (>= amount MIN_POST_BOOST) ERR_INVALID_AMOUNT)
+
+    ;; Validation: Post existence
+    (asserts! (is-some (get-post post-id)) ERR_POST_NOT_FOUND)
+
+    ;; Validation: Economic capability
+    (asserts! (>= (stx-get-balance tx-sender) amount) ERR_INSUFFICIENT_FUNDS)
+
+    ;; Economic commitment for amplification
+    (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+
+    ;; Boost tracking with timestamp
+    (map-set post-boosts {
+      post-id: post-id,
+      booster: tx-sender,
+    } {
+      amount: amount,
+      boosted-at: current-block,
+    })
+
+    ;; Post boost accumulation
+    (match (get-post post-id)
+      post-data (map-set posts { post-id: post-id }
+        (merge post-data { boosted-amount: (+ (get boosted-amount post-data) amount) })
+      )
+      false
+    )
+
+    (ok true)
+  )
+)
