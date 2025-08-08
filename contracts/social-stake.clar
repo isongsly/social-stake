@@ -310,3 +310,97 @@
     )
   )
 )
+
+;; Additional reputation staking mechanism
+(define-public (stake-for-reputation (amount uint))
+  (let (
+      (profile-result (map-get? principal-to-profile tx-sender))
+      (current-block stacks-block-height)
+    )
+    ;; Validation: Minimum stake requirement
+    (asserts! (>= amount MIN_POST_BOOST) ERR_INVALID_AMOUNT)
+
+    ;; Validation: Balance sufficiency
+    (asserts! (>= (stx-get-balance tx-sender) amount) ERR_INSUFFICIENT_FUNDS)
+
+    (match profile-result
+      profile-id (begin
+        ;; Economic commitment
+        (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+
+        ;; Reputation enhancement
+        (match (get-profile profile-id)
+          profile-data (map-set profiles { profile-id: profile-id }
+            (merge profile-data { staked-amount: (+ (get staked-amount profile-data) amount) })
+          )
+          false
+        )
+
+        ;; Stake tracking
+        (map-set profile-stakes {
+          profile-id: profile-id,
+          staker: tx-sender,
+        } {
+          amount: amount,
+          staked-at: current-block,
+        })
+
+        (ok true)
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
+
+;; SOCIAL GRAPH FUNCTIONS
+
+;; Establish following relationship with metric updates
+(define-public (follow-user (following-id uint))
+  (let (
+      (follower-profile-result (map-get? principal-to-profile tx-sender))
+      (current-block stacks-block-height)
+    )
+    (match follower-profile-result
+      follower-id (begin
+        ;; Validation: Prevent self-following
+        (asserts! (not (is-eq follower-id following-id)) ERR_SELF_FOLLOW)
+
+        ;; Validation: Target profile existence
+        (asserts! (is-some (get-profile following-id)) ERR_PROFILE_NOT_FOUND)
+
+        ;; Validation: Prevent duplicate follows
+        (asserts! (not (is-following follower-id following-id))
+          ERR_ALREADY_FOLLOWING
+        )
+
+        ;; Relationship establishment
+        (map-set following {
+          follower: follower-id,
+          following: following-id,
+        } {
+          followed-at: current-block,
+          is-active: true,
+        })
+
+        ;; Follower count increment for target
+        (match (get-profile following-id)
+          following-profile (map-set profiles { profile-id: following-id }
+            (merge following-profile { follower-count: (+ (get follower-count following-profile) u1) })
+          )
+          false
+        )
+
+        ;; Following count increment for initiator
+        (match (get-profile follower-id)
+          follower-profile (map-set profiles { profile-id: follower-id }
+            (merge follower-profile { following-count: (+ (get following-count follower-profile) u1) })
+          )
+          false
+        )
+
+        (ok true)
+      )
+      ERR_PROFILE_NOT_FOUND
+    )
+  )
+)
